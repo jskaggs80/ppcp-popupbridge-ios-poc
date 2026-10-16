@@ -1,0 +1,104 @@
+<!doctype html>
+<html><head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PopupBridge POC</title>
+<style>
+ body{font-family:-apple-system,sans-serif;padding:20px;max-width:480px;margin:auto}
+ #status{margin-top:16px;padding:12px;background:#f2f4f7;border-radius:8px;font-size:13px;white-space:pre-wrap;word-break:break-all}
+ .banner{padding:8px;border-radius:6px;font-size:13px;margin-bottom:12px}
+ .ok{background:#e3f6e8}.bad{background:#fde7e7}
+</style></head>
+<body>
+<h2>PayPal Orders v2 + PopupBridge</h2>
+<div id="bridge" class="banner"></div>
+<label>Amount (<span id="cur"></span>) <input id="amount" value="10.00" size="6"></label>
+<div id="paypal-button" style="margin-top:16px"></div>
+<button id="authorizeBtn" style="display:none;margin-top:12px;padding:10px 16px">Authorize saved order</button>
+<button id="captureBtn" style="display:none;margin-top:12px;padding:10px 16px">Capture authorization</button>
+<button id="resetBtn" style="display:none;margin-top:12px;padding:10px 16px">Start over</button>
+<div id="status">Loading…</div>
+<script>
+// Show text/JSON in the on-screen status box
+const log = (m) => { document.getElementById('status').textContent = typeof m === 'string' ? m : JSON.stringify(m, null, 2); };
+
+// Send a label + JSON to the server, which prints it in the terminal running `node server.js`
+const serverLog = (label, data) =>
+  fetch('/api/log', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ label, data }) }).catch(() => {});
+
+// Show "Start over" only once a test has been run
+const showReset = () => { document.getElementById('resetBtn').style.display = 'block'; };
+
+// Start over: reload the page for a clean slate (clears state, status box and re-renders the PayPal button).
+// window.popupBridge is re-injected by the app on every load, so no native restart is needed.
+document.getElementById('resetBtn').addEventListener('click', () => {
+  serverLog('START OVER', {});
+  window.location.reload();
+});
+
+let savedOrderId = null;
+let authorizationId = null;
+document.getElementById('authorizeBtn').addEventListener('click', async () => {
+  if (!savedOrderId) return;
+  const r = await fetch(`/api/orders/${savedOrderId}/authorize`, { method: 'POST' });
+  const c = await r.json();
+  console.log('AUTHORIZE RESPONSE', JSON.stringify(c, null, 2));
+  serverLog('AUTHORIZE', c);
+  log(c);
+  authorizationId = c.purchase_units?.[0]?.payments?.authorizations?.[0]?.id || null;
+  if (authorizationId) document.getElementById('captureBtn').style.display = 'block';
+});
+
+// Capture runs after authorize, against the authorization ID
+document.getElementById('captureBtn').addEventListener('click', async () => {
+  if (!authorizationId) return;
+  const r = await fetch(`/api/authorizations/${authorizationId}/capture`, { method: 'POST' });
+  const cap = await r.json();
+  console.log('CAPTURE RESPONSE', JSON.stringify(cap, null, 2));
+  serverLog('CAPTURE', cap);
+  log(cap);
+});
+
+const b = document.getElementById('bridge');
+if (window.popupBridge) { b.textContent = 'window.popupBridge detected'; b.className = 'banner ok'; }
+else { b.textContent = 'window.popupBridge NOT found (running outside the app?)'; b.className = 'banner bad'; }
+serverLog('PAGE LOADED', { popupBridgePresent: !!window.popupBridge });
+
+(async () => {
+  const cfg = await (await fetch('/api/config')).json();
+  document.getElementById('cur').textContent = cfg.currency;
+  const s = document.createElement('script');
+  s.src = `${cfg.sdkBase}/sdk/js?client-id=${encodeURIComponent(cfg.clientId)}&currency=${cfg.currency}&intent=authorize`;
+  s.onload = () => {
+    paypal.Buttons({
+      createOrder: async () => {
+        const r = await fetch('/api/orders', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ amount: document.getElementById('amount').value }) });
+        const o = await r.json();
+        console.log('CREATE ORDER RESPONSE', JSON.stringify(o, null, 2));
+        serverLog('CREATE ORDER', o);
+        showReset();
+        log(o);
+        if (!o.id) throw new Error(JSON.stringify(o));
+        return o.id;
+      },
+      // Orders (Save): after approval, SAVE the order (status -> SAVED). Authorize happens separately.
+      onApprove: async (data) => {
+        serverLog('ON APPROVE DATA', data);
+        const r = await fetch(`/api/orders/${data.orderID}/save`, { method: 'POST' });
+        const sv = await r.json();
+        console.log('SAVE RESPONSE', JSON.stringify(sv, null, 2));
+        serverLog('SAVE', sv);
+        log(sv);
+        savedOrderId = data.orderID;
+        document.getElementById('authorizeBtn').style.display = 'block';
+      },
+      onCancel: (data) => { showReset(); serverLog('CANCELLED', data); log('Buyer cancelled'); },
+      onError: (e) => { showReset(); serverLog('ERROR', { message: String(e) }); log('Error: ' + e); }
+    }).render('#paypal-button');
+    log('Ready. Tap the PayPal button.');
+  };
+  s.onerror = () => log('Failed to load PayPal JS SDK from ' + cfg.sdkBase);
+  document.head.appendChild(s);
+})();
+</script></body></html>

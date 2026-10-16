@@ -1,0 +1,28 @@
+name: PopupBridgePOC
+options:
+  bundleIdPrefix: com.example
+  deploymentTarget: { iOS: "16.0" }
+packages:
+  PopupBridge:
+    url: https://github.com/braintree/popup-bridge-ios
+    from: 3.0.0
+targets:
+  PopupBridgePOC:
+    type: application
+    platform: iOS
+    sources: [PopupBridgePOC]
+    dependencies:
+      - package: PopupBridge
+        product: PopupBridge
+    info:
+      path: PopupBridgePOC/Info.plist
+      properties:
+        UILaunchScreen: {}
+        CFBundleURLTypes:
+          - CFBundleURLSchemes: [popupbridgepoc]
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.PopupBridgePOC
+        SWIFT_VERSION: "5.10"
